@@ -1,9 +1,29 @@
 import streamlit as st
-import json
+from streamlit_pdf_viewer import pdf_viewer
 import re
 import tempfile
 from docling.document_converter import DocumentConverter
 from streamlit_ace import st_ace
+from pydantic import ValidationError
+from datetime import datetime
+from dateutil.parser import parse
+
+# Import the Pydantic models
+from models import OrderList, Order, Header, StopInfo, Address, Contact, Vehicle, ActivityEnum, ColorEnum
+
+# Constants
+MAX_FILE_SIZE_MB = 25
+MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+
+# Set page to wide mode
+st.set_page_config(page_title="SEMAT Orders", layout="wide")
+
+# Ensure session state is initialized
+if "extracted_orders" not in st.session_state:
+    st.session_state.extracted_orders = []
+if "json_viewer_key" not in st.session_state:
+    st.session_state.json_viewer_key = "json_viewer_1"  # Unique key for the st_ace widget
+
 
 def extract_text_from_pdf(pdf_path):
     """Extracts structured data from a PDF using Docling's DocumentConverter."""
@@ -88,95 +108,172 @@ def concatenate_text_from_index(objects_list, start_index=11):
     """
     return "\n".join(obj["text"] for obj in objects_list[start_index:] if "text" in obj and obj["text"].strip())
 
-def main():
-    st.title("SEMAT PDF Data Extraction")
-    st.write("Upload a PDF file to extract key information from the Order.")
+def format_date(value):
+    """Formats dates into 'DD/MM/YYYY' format."""
+    if value:
+        try:
+            return parse(value).strftime("%d/%m/%Y")
+        except (ValueError, TypeError):
+            return value
+    return value
+
+def build_order_model(data):
+    """Builds a structured OrderList object from extracted PDF data."""
     
-    uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
+    # Extract header fields
+    external_id = next((item["text"] for item in data["texts"] if item.get("self_ref") == "#/texts/5"), None)
+    delivery_requested_at = next((item["text"] for item in data["texts"] if item.get("self_ref") == "#/texts/6"), None)
     
-    if uploaded_file is not None:
+    ## Table 0
+    table_0_grid = data["tables"][0]["data"]["grid"]           
+    carplate = get_first_non_matching_value(table_0_grid[0], exclude_value="Matrícula / Bastidor:")
+    make = remove_substring_if_found("Marca:",get_first_non_matching_value(table_0_grid[1], exclude_value="Marca:"))
+    model = remove_substring_if_found("Modelo:",get_first_non_matching_value(table_0_grid[2], exclude_value="Modelo:"))
+    model = remove_substring_if_found(make, model)
+
+    # Table 1 (Origin)
+    table_1_grid = data["tables"][1]["data"]["grid"]
+    origin_address = Address(
+        address_name=get_first_non_matching_value(table_1_grid[0], "Punto de Recogida:"),
+        street=get_first_non_matching_value(table_1_grid[2], "Dirección:"),
+        city=None,  # Extract city if available
+        province=get_first_non_matching_value(table_1_grid[4], "Provincia:"),
+        postal_code=get_first_word(get_first_non_matching_value(table_1_grid[3], "Código Postal:")),
+    )
+    origin_contact = Contact(
+        contact_person=get_first_non_matching_value(table_1_grid[1], "Persona de Contacto:"),
+        phone=get_first_non_matching_value(table_1_grid[5], "Teléfono de Contacto:")
+    )
+    
+    # Table 2 (Destination)
+    table_2_grid = data["tables"][2]["data"]["grid"]
+    destination_address = Address(
+        address_name=get_first_non_matching_value(table_2_grid[0], "Punto de Entrega:"),
+        street=get_first_non_matching_value(table_2_grid[2], "Dirección:"),
+        city=None,  
+        province=get_first_non_matching_value(table_2_grid[4], "Provincia:"),
+        postal_code=get_first_word(get_first_non_matching_value(table_2_grid[3], "Código Postal:")),
+    )
+    destination_contact = Contact(
+        contact_person=get_first_non_matching_value(table_2_grid[1], "Persona de Contacto:"),
+        phone=get_first_non_matching_value(table_2_grid[5], "Teléfono de Contacto:")
+    )
+
+    # Vehicles
+    vehicles_origin = [Vehicle(
+        license_plate=carplate or "UNKNOWN",
+        make=make or "UNKNOWN",
+        model=model,
+        activity=ActivityEnum.Collection,  # Collection for first stop
+    )]
+
+    vehicles_destination = [Vehicle(
+        license_plate=carplate or "UNKNOWN",
+        make=make or "UNKNOWN",
+        model=model,
+        activity=ActivityEnum.Delivery,  # Delivery for second stop
+    )]
+
+    # Stops
+    stops = [
+        StopInfo(stop_number=1, address=origin_address, contact=origin_contact, vehicles=vehicles_origin),
+        StopInfo(stop_number=2, address=destination_address, contact=destination_contact, vehicles=vehicles_destination)
+    ]
+
+    # Header
+    header = Header(
+        company_name="SEMAT",
+        customer_code=None,
+        shipment_id=external_id or "UNKNOWN",
+        available_at=format_date(datetime.now().isoformat()),
+        delivery_requested_at=format_date(delivery_requested_at),
+        sender_email=None,
+        number_of_stops=len(stops),
+        number_of_vehicles=len(vehicles_origin),
+    )
+
+    return Order(header=header, stops=stops)
+
+
+def process_uploaded_files(uploaded_files):
+    """Processes and extracts data from uploaded PDF files."""
+    new_orders = []
+    progress_bar = st.progress(0)
+
+    for idx, uploaded_file in enumerate(uploaded_files):
+        file_size = uploaded_file.size
+        if file_size > MAX_FILE_SIZE_BYTES:
+            st.error(f"File '{uploaded_file.name}' exceeds {MAX_FILE_SIZE_MB}MB and was skipped.")
+            continue
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
             temp_file.write(uploaded_file.read())
             temp_pdf_path = temp_file.name
+
+        st.write(f"🔍 Extracting data from **{uploaded_file.name}**...")
+
+        try:
+            extracted_data = extract_text_from_pdf(temp_pdf_path)  # Assume function exists
+            if extracted_data:
+                new_order = build_order_model(extracted_data["dict"])  # Assume function exists
+                new_orders.append(new_order)
+        except ValidationError as e:
+            st.error(f"❌ Validation error in {uploaded_file.name}: {e}")
+        except Exception as e:
+            st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
+
+        progress_bar.progress((idx + 1) / len(uploaded_files))  # Update progress bar
+
+    progress_bar.empty()  # Remove progress bar when done
+    return new_orders
+
+def display_extracted_orders():
+    """Displays extracted orders with a PDF viewer on the left and JSON on the right."""
+    if st.session_state.extracted_orders:
+        st.subheader("📋 Extracted Order Data")
+
+        # Create a side-by-side layout
+        col1, col2 = st.columns([1, 1])
+
+        with col1:
+            st.subheader("📄 Uploaded PDFs")
+            if "uploaded_files" in st.session_state:
+                for uploaded_file in st.session_state.uploaded_files:
+                    binary_data = uploaded_file.getvalue()
+                    pdf_viewer(input=binary_data, width=700)
+
+        with col2:
+            st.subheader("📂 JSON Viewer")
+            order_list = OrderList(orders=st.session_state.extracted_orders)
+            formatted_json = order_list.model_dump_json(indent=4)
+            st_ace(formatted_json, language="json", theme="monokai", key=st.session_state.json_viewer_key)
+
+        # Clear orders button
+        if st.button("🗑️ Clear Extracted Orders"):
+            st.session_state.extracted_orders = []
+            st.session_state.json_viewer_key = f"json_viewer_{st.session_state.json_viewer_key[-1:]}"  # Update widget key
+            st.rerun()  # Refresh UI
+
+
+def main():
+    st.title("📄 SEMAT PDF Data Extraction")
+    st.write("Upload multiple PDF files to extract key information from Orders.")
+
+    uploaded_files = st.file_uploader(
+        "📂 Choose PDF files (Max: 25MB each)",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key="uploaded_files"
+    )
+
+    if uploaded_files:
+        new_orders = process_uploaded_files(uploaded_files)
         
-        st.write("Extracting information...")
-        extracted_data = extract_text_from_pdf(temp_pdf_path)
-        
-        if extracted_data:
-            st.success("Extraction Complete!")
+        if new_orders:
+            st.session_state.extracted_orders.extend(new_orders)
+            st.success(f"✅ Successfully extracted {len(new_orders)} new orders!")
 
-            
-            #st.subheader("Extracted Markdown Data")
-            #st.markdown(extracted_data["text"])  # Display extracted text in a markdown visualizer
-
-            st.subheader("Extracted JSON Data")
-            
-            data = extracted_data["dict"]
-
-            external_id = next((item["text"] for item in data["texts"] if item.get("self_ref") == "#/texts/5"), None)
-            st.write("External ID: ", external_id)
-
-            delivery_requested_at = next((item["text"] for item in data["texts"] if item.get("self_ref") == "#/texts/6"), None)
-            st.write("Delivery Requested at: ", delivery_requested_at)
-
-
-            ## Table 0
-            table_0_grid = data["tables"][0]["data"]["grid"]           
-            carplate = get_first_non_matching_value(table_0_grid[0], exclude_value="Matrícula / Bastidor:")
-            st.write("Carplate: ", carplate)
-            make = get_first_non_matching_value(table_0_grid[1], exclude_value="Marca:")
-            st.write("Make: ", make)
-            model = get_first_non_matching_value(table_0_grid[2], exclude_value="Modelo:")
-            model = remove_substring_if_found(make, model)
-            st.write("Model: ", model)
-
-            ## Table 1
-            st.subheader("Origin")
-            table_1_grid = data["tables"][1]["data"]["grid"]
-            origin_name = get_first_non_matching_value(table_1_grid[0], exclude_value="Punto de Recogida:")
-            st.write("Origin Name: ", origin_name)
-            origin_contact = get_first_non_matching_value(table_1_grid[1], exclude_value="Persona de Contacto:")
-            st.write("Origin Contact: ", origin_contact)
-            origin_address = get_first_non_matching_value(table_1_grid[2], exclude_value="Dirección:")
-            st.write("Origin Address: ", origin_address)
-            origin_zip = get_first_non_matching_value(table_1_grid[3], exclude_value="Código Postal:")
-            origin_zip = get_first_word(origin_zip)
-            st.write("Origin ZIP: ", origin_zip)
-            origin_province = get_first_non_matching_value(table_1_grid[4], exclude_value="Provincia:")
-            st.write("Origin Province: ", origin_province)
-            origin_telephone = get_first_non_matching_value(table_1_grid[5], exclude_value="Teléfono de Contacto:")
-            st.write("Origin Telephone: ", origin_telephone)
-            origin_comments = get_first_non_matching_value(table_1_grid[6], exclude_value="Observaciones:")
-            st.write("Origin Comments: ", origin_comments)
-
-            ## Table 2
-            st.subheader("Destination")          
-            table_2_grid = data["tables"][2]["data"]["grid"]
-            destination_name = get_first_non_matching_value(table_2_grid[0], exclude_value="Punto de Entrega:")
-            st.write("Name: ", destination_name)
-            destination_contact = get_first_non_matching_value(table_2_grid[1], exclude_value="Persona de Contacto:")
-            st.write("Contact: ", destination_contact)
-            destination_address = get_first_non_matching_value(table_2_grid[2], exclude_value="Dirección:")
-            st.write("Address: ", destination_address)
-            destination_zip = get_first_non_matching_value(table_2_grid[3], exclude_value="Código Postal:")
-            destination_zip = get_first_word(destination_zip)
-            st.write("ZIP: ", destination_zip)
-            destination_province = get_first_non_matching_value(table_2_grid[4], exclude_value="Provincia:")
-            st.write("Province: ", destination_province)
-            destination_telephone = get_first_non_matching_value(table_2_grid[5], exclude_value="Teléfono de Contacto:")
-            st.write("Telephone: ", destination_telephone)
-            destination_comments = get_first_non_matching_value(table_2_grid[6], exclude_value="Observaciones:")
-            st.write("Comments: ", destination_comments)
-
-            ## Comments
-
-            comments = concatenate_text_from_index(data["texts"], start_index=11)
-            st.text_area("Comments:", comments, height=300)
-            
-            json_data = json.dumps(data, indent=4)
-            st_ace(json_data, language="json", theme="monokai", key="json_viewer")
-        else:
-            st.error("No data extracted from the PDF.")
+    display_extracted_orders()
 
 if __name__ == "__main__":
     main()
