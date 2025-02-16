@@ -1,5 +1,6 @@
 import streamlit as st
 import json
+import re
 import tempfile
 from docling.document_converter import DocumentConverter
 from streamlit_ace import st_ace
@@ -22,18 +23,6 @@ def extract_value_by_self_ref(json_data, self_ref):
             return [cell["text"] for cell in table["data"]["table_cells"]]
     return None
 
-def extract_cell_value(table_cells, keyword):
-    """
-    Extracts the value associated with a given keyword in a table cell list.
-
-    :param table_cells: List of table cell texts (e.g., ["Modelo: HYUNDAI I30"])
-    :param keyword: The keyword to look for (e.g., "Modelo")
-    :return: The extracted value (e.g., "HYUNDAI I30") or None if not found.
-    """
-    for cell in table_cells:
-        if keyword in cell:
-            return cell.split(":", 1)[-1].strip()  # Extract the part after ":"
-    return None
 
 def get_first_non_matching_value(columns, exclude_value):
     """
@@ -52,15 +41,42 @@ def get_first_non_matching_value(columns, exclude_value):
 
 def get_first_word(text):
     """
-    Extracts the first word from a given text safely.
+    Extracts the first word from a given text safely and ensures it has a valid postal code format.
 
     :param text: The input string.
-    :return: The first word if available, else an empty string.
+    :return: The first word if it looks like a postal code; otherwise, the original text.
     """
     if not isinstance(text, str) or not text.strip():
         return ""  # Return empty string if text is None, empty, or not a string
 
-    return text.split()[0]  # Split by space and get the first word
+    first_word = text.split()[0]
+
+    # Postal Code Format: Typically 5-digit numbers (can be extended for other formats)
+    if re.fullmatch(r"\d{4,5}", first_word):  
+        return first_word
+
+    return text  # Return original input if first word is not a postal code
+
+def remove_substring_if_found(substring: str, main_string: str) -> str:
+    """
+    Converts both input strings to uppercase, and if the first string is found
+    in the second one, removes it.
+
+    :param substring: The string to check and remove.
+    :param main_string: The string from which the substring should be removed.
+    :return: The modified main string with the substring removed if found.
+    """
+    if not substring or not main_string:
+        return main_string.strip()
+
+    substring_upper = substring.upper()
+    main_string_upper = main_string.upper()
+
+    if main_string_upper.startswith(substring_upper):
+        return main_string[len(substring) :].strip()
+
+    return main_string.strip()
+
 
 def concatenate_text_from_index(objects_list, start_index=11):
     """
@@ -105,12 +121,13 @@ def main():
 
 
             ## Table 0
-            table_0_cells = extract_value_by_self_ref(data, "#/tables/0")            
-            carplate = extract_cell_value(table_0_cells, "Matrícula / Bastidor")
+            table_0_grid = data["tables"][0]["data"]["grid"]           
+            carplate = get_first_non_matching_value(table_0_grid[0], exclude_value="Matrícula / Bastidor:")
             st.write("Carplate: ", carplate)
-            make = extract_cell_value(table_0_cells, "Marca")
+            make = get_first_non_matching_value(table_0_grid[1], exclude_value="Marca:")
             st.write("Make: ", make)
-            model = extract_cell_value(table_0_cells, "Modelo")
+            model = get_first_non_matching_value(table_0_grid[2], exclude_value="Modelo:")
+            model = remove_substring_if_found(make, model)
             st.write("Model: ", model)
 
             ## Table 1
