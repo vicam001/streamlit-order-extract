@@ -11,7 +11,8 @@ source venv/bin/activate
 ```
 To exit the virtual env:
 ```bash
-deactiv
+deactivate
+```
 
 ## Streamlit
 ```bash
