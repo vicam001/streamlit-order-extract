@@ -19,3 +19,12 @@ pip install streamlit
 streamlit hello
 streamlit run app.py
 ```
+
+
+## Docling
+
+- Update Certificate
+
+```bash
+/Applications/Python\ 3.12/Install\ Certificates.command
+```
