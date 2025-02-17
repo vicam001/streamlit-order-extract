@@ -2,3 +2,4 @@ streamlit
 streamlit_ace
 streamlit_pdf_viewer
 pydantic
+docling
