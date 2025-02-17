@@ -77,25 +77,27 @@ def get_first_word(text):
 
     return text  # Return original input if first word is not a postal code
 
-def remove_substring_if_found(substring: str, main_string: str) -> str:
+def remove_substring_if_found(substring: str | None, main_string: str | None) -> str:
     """
-    Converts both input strings to uppercase, and if the first string is found
-    in the second one, removes it.
+    Removes the given substring from the start of the main string, case-insensitively.
 
-    :param substring: The string to check and remove.
-    :param main_string: The string from which the substring should be removed.
+    :param substring: The string to check and remove (can be None).
+    :param main_string: The string from which the substring should be removed (can be None).
     :return: The modified main string with the substring removed if found.
     """
-    if not substring or not main_string:
-        return main_string.strip()
+    # Handle None values by converting them to empty strings
+    if substring is None:
+        substring = ""
+    if main_string is None:
+        return ""
 
-    substring_upper = substring.upper()
-    main_string_upper = main_string.upper()
+    main_string = main_string.strip()
+    substring = substring.strip()
 
-    if main_string_upper.startswith(substring_upper):
-        return main_string[len(substring) :].strip()
+    if main_string.upper().startswith(substring.upper()):
+        return main_string[len(substring) :].lstrip()  # Use lstrip() to remove leftover leading spaces
 
-    return main_string.strip()
+    return main_string
 
 
 def concatenate_text_from_index(objects_list, start_index=11):
@@ -144,6 +146,7 @@ def build_order_model(data):
         contact_person=get_first_non_matching_value(table_1_grid[1], "Persona de Contacto:"),
         phone=get_first_non_matching_value(table_1_grid[5], "Teléfono de Contacto:")
     )
+    origin_comments=remove_substring_if_found("Observaciones:",get_first_non_matching_value(table_1_grid[6], "Observaciones:"))
     
     # Table 2 (Destination)
     table_2_grid = data["tables"][2]["data"]["grid"]
@@ -158,6 +161,8 @@ def build_order_model(data):
         contact_person=get_first_non_matching_value(table_2_grid[1], "Persona de Contacto:"),
         phone=get_first_non_matching_value(table_2_grid[5], "Teléfono de Contacto:")
     )
+    destination_comments=remove_substring_if_found("Observaciones:",get_first_non_matching_value(table_2_grid[6], "Observaciones:"))
+
 
     # Vehicles
     vehicles_origin = [Vehicle(
@@ -176,8 +181,8 @@ def build_order_model(data):
 
     # Stops
     stops = [
-        StopInfo(stop_number=1, address=origin_address, contact=origin_contact, vehicles=vehicles_origin),
-        StopInfo(stop_number=2, address=destination_address, contact=destination_contact, vehicles=vehicles_destination)
+        StopInfo(stop_number=1, address=origin_address, contact=origin_contact, vehicles=vehicles_origin, comments=origin_comments),
+        StopInfo(stop_number=2, address=destination_address, contact=destination_contact, vehicles=vehicles_destination, comments=destination_comments),
     ]
 
     # Header
