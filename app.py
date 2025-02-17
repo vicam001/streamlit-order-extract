@@ -43,7 +43,6 @@ def extract_value_by_self_ref(json_data, self_ref):
             return [cell["text"] for cell in table["data"]["table_cells"]]
     return None
 
-
 def get_first_non_matching_value(columns, exclude_value):
     """
     Returns the first value from a given key in an array of objects that does NOT match the exclude_value.
@@ -98,7 +97,6 @@ def remove_substring_if_found(substring: str | None, main_string: str | None) ->
         return main_string[len(substring) :].lstrip()  # Use lstrip() to remove leftover leading spaces
 
     return main_string
-
 
 def concatenate_text_from_index(objects_list, start_index=11):
     """
@@ -199,7 +197,6 @@ def build_order_model(data):
 
     return Order(header=header, stops=stops)
 
-
 def process_uploaded_files(uploaded_files):
     """Processes and extracts data from uploaded PDF files."""
     new_orders = []
@@ -259,26 +256,34 @@ def display_extracted_orders():
             st.session_state.json_viewer_key = f"json_viewer_{st.session_state.json_viewer_key[-1:]}"  # Update widget key
             st.rerun()  # Refresh UI
 
-
 def main():
-    st.title("📄 SEMAT PDF Data Extraction")
-    st.write("Upload multiple PDF files to extract key information from Orders.")
 
-    uploaded_files = st.file_uploader(
-        "📂 Choose PDF files (Max: 25MB each)",
-        type=["pdf"],
-        accept_multiple_files=True,
-        key="uploaded_files"
-    )
+    # Sidebar navigation
+    page = st.sidebar.radio("Navigation", ["PDF Orders", "HTML Orders"])
 
-    if uploaded_files:
-        new_orders = process_uploaded_files(uploaded_files)
-        
-        if new_orders:
-            st.session_state.extracted_orders.extend(new_orders)
-            st.success(f"✅ Successfully extracted {len(new_orders)} new orders!")
+    if page == "PDF Orders":
+        st.title("📄 PDF Data Extraction")
+        st.write("Upload multiple PDF files to extract key information from Orders.")
 
-    display_extracted_orders()
+        uploaded_files = st.file_uploader(
+            "📂 Choose PDF files (Max: 25MB each)",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key="uploaded_files"
+        )
+
+        if uploaded_files:
+            new_orders = process_uploaded_files(uploaded_files)
+            
+            if new_orders:
+                st.session_state.extracted_orders.extend(new_orders)
+                st.success(f"✅ Successfully extracted {len(new_orders)} new orders!")
+
+        display_extracted_orders()
+
+    elif page == "HTML Orders":
+        st.title("📄 HTML Data Extraction")
+        st.write("Upload multiple HTML files to extract key information from Orders.")
 
 if __name__ == "__main__":
     main()
