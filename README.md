@@ -28,3 +28,10 @@ streamlit run app.py
 ```bash
 /Applications/Python\ 3.12/Install\ Certificates.command
 ```
+
+- Use of the CLI
+
+```bash
+cd examples
+docling --from html --to md  body.html
+```

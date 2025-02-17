@@ -3,10 +3,12 @@ from streamlit_pdf_viewer import pdf_viewer
 from streamlit_ace import st_ace
 import re
 import tempfile
+import json
 from docling.document_converter import DocumentConverter
 from pydantic import ValidationError
 from datetime import datetime
 from dateutil.parser import parse
+from bs4 import BeautifulSoup
 
 # Import the Pydantic models
 from models import OrderList, Order, Header, StopInfo, Address, Contact, Vehicle, ActivityEnum, ColorEnum
@@ -16,7 +18,7 @@ MAX_FILE_SIZE_MB = 25
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 # Set page to wide mode
-st.set_page_config(page_title="SEMAT Orders", layout="wide")
+st.set_page_config(page_title="Orders Data", layout="wide")
 
 # Ensure session state is initialized
 if "extracted_orders" not in st.session_state:
@@ -25,10 +27,10 @@ if "json_viewer_key" not in st.session_state:
     st.session_state.json_viewer_key = "json_viewer_1"  # Unique key for the st_ace widget
 
 
-def extract_text_from_pdf(pdf_path):
-    """Extracts structured data from a PDF using Docling's DocumentConverter."""
+def extract_text_from_file(file_path):
+    """Extracts structured data from a PDF/HTML file using Docling's DocumentConverter."""
     converter = DocumentConverter()
-    result = converter.convert(pdf_path)
+    result = converter.convert(file_path)
     
     extracted_data = {
         "text": result.document.export_to_markdown(),
@@ -197,7 +199,7 @@ def build_order_model(data):
 
     return Order(header=header, stops=stops)
 
-def process_uploaded_files(uploaded_files):
+def process_uploaded_pdfs(uploaded_files):
     """Processes and extracts data from uploaded PDF files."""
     new_orders = []
     progress_bar = st.progress(0)
@@ -215,10 +217,92 @@ def process_uploaded_files(uploaded_files):
         st.write(f"🔍 Extracting data from **{uploaded_file.name}**...")
 
         try:
-            extracted_data = extract_text_from_pdf(temp_pdf_path)  # Assume function exists
+            extracted_data = extract_text_from_file(temp_pdf_path)  # Assume function exists
             if extracted_data:
                 new_order = build_order_model(extracted_data["dict"])  # Assume function exists
                 new_orders.append(new_order)
+        except ValidationError as e:
+            st.error(f"❌ Validation error in {uploaded_file.name}: {e}")
+        except Exception as e:
+            st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
+
+        progress_bar.progress((idx + 1) / len(uploaded_files))  # Update progress bar
+
+    progress_bar.empty()  # Remove progress bar when done
+    return new_orders
+
+def extract_nested_tables(html_content):
+    """Extracts data from multiple nested tables and returns a structured dictionary."""
+    soup = BeautifulSoup(html_content, "html.parser")
+    
+    def parse_table(table):
+        """Recursively extracts table data into a structured dictionary."""
+        data = []
+        headers = [th.get_text(strip=True) for th in table.find_all("th")]
+
+        for row in table.find_all("tr"):
+            cells = row.find_all("td")
+            if cells:
+                row_data = {}
+                for idx, cell in enumerate(cells):
+                    if headers and idx < len(headers):
+                        key = headers[idx]
+                    else:
+                        key = f"Column_{idx + 1}"
+                    
+                    # Check if this cell contains another table
+                    nested_table = cell.find("table")
+                    if nested_table:
+                        row_data[key] = parse_table(nested_table)  # Recursively process
+                    else:
+                        row_data[key] = cell.get_text(strip=True)
+
+                data.append(row_data)
+
+        return data
+
+    # Extract top-level tables
+    extracted_data = []
+    for table in soup.find_all("table"):
+        extracted_data.append(parse_table(table))
+
+    return extracted_data
+
+def process_uploaded_htmls(uploaded_files):
+    """Processes and extracts data from uploaded HTML files."""
+    new_orders = []
+    progress_bar = st.progress(0)
+
+    for idx, uploaded_file in enumerate(uploaded_files):
+        file_size = uploaded_file.size
+        if file_size > MAX_FILE_SIZE_BYTES:
+            st.error(f"File '{uploaded_file.name}' exceeds {MAX_FILE_SIZE_MB}MB and was skipped.")
+            continue
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as temp_file:
+            temp_file.write(uploaded_file.read())
+            temp_html_path = temp_file.name
+
+        st.write(f"🔍 Extracting data from **{uploaded_file.name}**...")
+
+        try:
+            # extracted_data = extract_text_from_file(temp_html_path)
+            converter = DocumentConverter()
+            result = converter.convert(temp_html_path)
+            
+            # Extract structured table data
+            tables_data = extract_nested_tables(uploaded_file.getvalue())
+
+            extracted_data = {
+                "text": result.document.export_to_markdown(),
+                "dict": result.document.export_to_dict(),
+                "tables": tables_data
+            }
+            if extracted_data:
+               # new_order = build_order_model(extracted_data["dict"])
+               # new_orders.append(new_order)
+               new_orders = extracted_data
+
         except ValidationError as e:
             st.error(f"❌ Validation error in {uploaded_file.name}: {e}")
         except Exception as e:
@@ -256,6 +340,33 @@ def display_extracted_orders():
             st.session_state.json_viewer_key = f"json_viewer_{st.session_state.json_viewer_key[-1:]}"  # Update widget key
             st.rerun()  # Refresh UI
 
+def display_extracted_html_orders():
+    """Displays extracted orders with an HTML viewer on the left and JSON on the right."""
+    if st.session_state.extracted_orders:
+        st.subheader("📋 Extracted Order Data")
+
+        # Create a side-by-side layout
+        col1, col2 = st.columns([1, 1])
+
+        with col1:
+            st.subheader("📄 Uploaded HTMLs")
+            if "uploaded_files" in st.session_state:
+                for uploaded_file in st.session_state.uploaded_files:
+                    binary_data = uploaded_file.getvalue()                    
+
+        with col2:
+            st.subheader("📂 JSON Viewer")
+            order_list = OrderList(orders=st.session_state.extracted_orders)
+            formatted_json = order_list.model_dump_json(indent=4)
+            st_ace(formatted_json, language="json", theme="monokai", key=st.session_state.json_viewer_key)
+
+        # Clear orders button
+        if st.button("🗑️ Clear Extracted Orders"):
+            st.session_state.extracted_orders = []
+            st.session_state.json_viewer_key = f"json_viewer_{st.session_state.json_viewer_key[-1:]}"  # Update widget key
+            st.rerun()  # Refresh UI            
+
+
 def main():
 
     # Sidebar navigation
@@ -273,7 +384,7 @@ def main():
         )
 
         if uploaded_files:
-            new_orders = process_uploaded_files(uploaded_files)
+            new_orders = process_uploaded_pdfs(uploaded_files)
             
             if new_orders:
                 st.session_state.extracted_orders.extend(new_orders)
@@ -284,6 +395,22 @@ def main():
     elif page == "HTML Orders":
         st.title("📄 HTML Data Extraction")
         st.write("Upload multiple HTML files to extract key information from Orders.")
+
+        uploaded_files = st.file_uploader(
+            "📂 Choose HTML files (Max: 25MB each)",
+            type=["html"],
+            accept_multiple_files=True,
+            key="uploaded_files"
+        )
+
+        if uploaded_files:
+            extracted_data = process_uploaded_htmls(uploaded_files)
+
+            # Display extracted data
+            st.success("Extraction Complete!")
+            st.subheader("Extracted JSON Data")
+            json_data = json.dumps(extracted_data, indent=4)
+            st_ace(json_data, language="json", theme="monokai", key="json_viewer")
 
 if __name__ == "__main__":
     main()
