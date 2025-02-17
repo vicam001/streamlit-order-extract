@@ -21,7 +21,6 @@ streamlit hello
 streamlit run app.py
 ```
 
-
 ## Docling
 
 - Update Certificate
