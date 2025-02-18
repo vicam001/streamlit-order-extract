@@ -8,7 +8,6 @@ from docling.document_converter import DocumentConverter
 from pydantic import ValidationError
 from datetime import datetime
 from dateutil.parser import parse
-from bs4 import BeautifulSoup
 
 # Import the Pydantic models
 from models import OrderList, Order, Header, StopInfo, Address, Contact, Vehicle, ActivityEnum, ColorEnum
@@ -231,43 +230,6 @@ def process_uploaded_pdfs(uploaded_files):
     progress_bar.empty()  # Remove progress bar when done
     return new_orders
 
-def extract_nested_tables(html_content):
-    """Extracts data from multiple nested tables and returns a structured dictionary."""
-    soup = BeautifulSoup(html_content, "html.parser")
-    
-    def parse_table(table):
-        """Recursively extracts table data into a structured dictionary."""
-        data = []
-        headers = [th.get_text(strip=True) for th in table.find_all("th")]
-
-        for row in table.find_all("tr"):
-            cells = row.find_all("td")
-            if cells:
-                row_data = {}
-                for idx, cell in enumerate(cells):
-                    if headers and idx < len(headers):
-                        key = headers[idx]
-                    else:
-                        key = f"Column_{idx + 1}"
-                    
-                    # Check if this cell contains another table
-                    nested_table = cell.find("table")
-                    if nested_table:
-                        row_data[key] = parse_table(nested_table)  # Recursively process
-                    else:
-                        row_data[key] = cell.get_text(strip=True)
-
-                data.append(row_data)
-
-        return data
-
-    # Extract top-level tables
-    extracted_data = []
-    for table in soup.find_all("table"):
-        extracted_data.append(parse_table(table))
-
-    return extracted_data
-
 def process_uploaded_htmls(uploaded_files):
     """Processes and extracts data from uploaded HTML files."""
     new_orders = []
@@ -287,16 +249,15 @@ def process_uploaded_htmls(uploaded_files):
 
         try:
             # extracted_data = extract_text_from_file(temp_html_path)
+            html_content = uploaded_file.getvalue().decode("utf-8")
+            # Convert HTML to a PDF
+
             converter = DocumentConverter()
             result = converter.convert(temp_html_path)
             
-            # Extract structured table data
-            tables_data = extract_nested_tables(uploaded_file.getvalue())
-
             extracted_data = {
                 "text": result.document.export_to_markdown(),
                 "dict": result.document.export_to_dict(),
-                "tables": tables_data
             }
             if extracted_data:
                # new_order = build_order_model(extracted_data["dict"])
@@ -409,7 +370,7 @@ def main():
             # Display extracted data
             st.success("Extraction Complete!")
             st.subheader("Extracted JSON Data")
-            json_data = json.dumps(extracted_data, indent=4)
+            json_data = json.dumps(extracted_data['dict'], indent=4)
             st_ace(json_data, language="json", theme="monokai", key="json_viewer")
 
 if __name__ == "__main__":

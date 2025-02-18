@@ -14,6 +14,13 @@ To exit the virtual env:
 deactivate
 ```
 
+## Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+
 ## Streamlit
 ```bash
 pip install streamlit

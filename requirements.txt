@@ -4,4 +4,3 @@ streamlit-ace
 docling
 pydantic
 python-dateutil
-beautifulsoup4
