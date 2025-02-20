@@ -424,6 +424,12 @@ def main():
             # Display extracted data
             st.success("Extraction Complete!")
             st.subheader("Extracted JSON Data")
+
+            data=extracted_data['dict']
+            text=extracted_data['text']
+            st.markdown(text)
+
+
             json_data = json.dumps(extracted_data['dict']['tables'], indent=4)
             st_ace(json_data, language="json", theme="monokai", key="json_viewer")
 
