@@ -8,6 +8,8 @@ from docling.document_converter import DocumentConverter
 from pydantic import ValidationError
 from datetime import datetime
 from dateutil.parser import parse
+from weasyprint import HTML, CSS
+
 
 # Import the Pydantic models
 from models import OrderList, Order, Header, StopInfo, Address, Contact, Vehicle, ActivityEnum, ColorEnum
@@ -230,6 +232,38 @@ def process_uploaded_pdfs(uploaded_files):
     progress_bar.empty()  # Remove progress bar when done
     return new_orders
 
+# Define CSS to fix missing content issues
+CSS_STYLES = """
+@page {
+    size: A3;
+    margin: 15mm;
+}
+
+/* Prevent elements from breaking across pages */
+.no-break {
+    page-break-inside: avoid;
+}
+
+/* Force new pages for important sections */
+.page-break {
+    page-break-before: always;
+}
+
+/* Ensure images and tables fit the page */
+img, table {
+    max-width: 100%;
+    height: auto;
+}
+
+/* Set body width to fit standard page */
+body {
+    width: 210mm;
+    height: auto;
+    margin: 10mm;
+}
+"""
+
+
 def process_uploaded_htmls(uploaded_files):
     """Processes and extracts data from uploaded HTML files."""
     new_orders = []
@@ -252,8 +286,25 @@ def process_uploaded_htmls(uploaded_files):
             html_content = uploaded_file.getvalue().decode("utf-8")
             # Convert HTML to a PDF
 
+            # Convert HTML to PDF using WeasyPrint
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
+                HTML(string=html_content, base_url=".").write_pdf(temp_pdf.name, stylesheets=[CSS(string=CSS_STYLES)])
+                pdf_path = temp_pdf.name
+
+            st.success("✅ PDF generated successfully!")
+
+            # Allow user to download the PDF
+            with open(pdf_path, "rb") as f:
+                st.download_button(
+                    label="📄 Download PDF",
+                    data=f,
+                    file_name="converted.pdf",
+                    mime="application/pdf"
+                )
+
+
             converter = DocumentConverter()
-            result = converter.convert(temp_html_path)
+            result = converter.convert(pdf_path)
             
             extracted_data = {
                 "text": result.document.export_to_markdown(),
@@ -301,6 +352,7 @@ def display_extracted_orders():
             st.session_state.json_viewer_key = f"json_viewer_{st.session_state.json_viewer_key[-1:]}"  # Update widget key
             st.rerun()  # Refresh UI
 
+
 def display_extracted_html_orders():
     """Displays extracted orders with an HTML viewer on the left and JSON on the right."""
     if st.session_state.extracted_orders:
@@ -317,8 +369,10 @@ def display_extracted_html_orders():
 
         with col2:
             st.subheader("📂 JSON Viewer")
-            order_list = OrderList(orders=st.session_state.extracted_orders)
-            formatted_json = order_list.model_dump_json(indent=4)
+            #order_list = OrderList(orders=st.session_state.extracted_orders)
+            #formatted_json = order_list.model_dump_json(indent=4)
+            formatted_json = st.session_state.extracted_orders["tables"]
+
             st_ace(formatted_json, language="json", theme="monokai", key=st.session_state.json_viewer_key)
 
         # Clear orders button
@@ -370,7 +424,7 @@ def main():
             # Display extracted data
             st.success("Extraction Complete!")
             st.subheader("Extracted JSON Data")
-            json_data = json.dumps(extracted_data['dict'], indent=4)
+            json_data = json.dumps(extracted_data['dict']['tables'], indent=4)
             st_ace(json_data, language="json", theme="monokai", key="json_viewer")
 
 if __name__ == "__main__":
